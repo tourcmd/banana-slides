@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Home, Clock, FileText, ChevronRight, Trash2 } from 'lucide-react';
+import { Home, Trash2 } from 'lucide-react';
 import { Button, Loading, Card, useToast, useConfirm } from '@/components/shared';
+import { ProjectCard } from '@/components/history/ProjectCard';
 import { useProjectStore } from '@/store/useProjectStore';
 import * as api from '@/api/endpoints';
-import { getImageUrl } from '@/api/client';
 import { normalizeProject } from '@/utils';
+import { getProjectTitle, getProjectRoute } from '@/utils/projectUtils';
 import type { Project } from '@/types';
 
 export const History: React.FC = () => {
@@ -17,6 +18,8 @@ export const History: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState<string>('');
   const { show, ToastContainer } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
 
@@ -24,7 +27,9 @@ export const History: React.FC = () => {
     loadProjects();
   }, []);
 
-  const loadProjects = async () => {
+  // ===== 数据加载 =====
+
+  const loadProjects = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -39,14 +44,21 @@ export const History: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const handleSelectProject = async (project: Project) => {
+  // ===== 项目选择与导航 =====
+
+  const handleSelectProject = useCallback(async (project: Project) => {
     const projectId = project.id || project.project_id;
     if (!projectId) return;
 
     // 如果正在批量选择模式，不跳转
     if (selectedProjects.size > 0) {
+      return;
+    }
+
+    // 如果正在编辑该项目，不跳转
+    if (editingProjectId === projectId) {
       return;
     }
 
@@ -58,26 +70,9 @@ export const History: React.FC = () => {
       // 同步项目数据
       await syncProject(projectId);
       
-      // 根据项目状态跳转到不同页面，并传递来源信息
-      const navigateOptions = { state: { from: 'history' } };
-      if (project.pages && project.pages.length > 0) {
-        // 检查是否有生成的图片
-        const hasImages = project.pages.some(p => p.generated_image_path);
-        if (hasImages) {
-          navigate(`/project/${projectId}/preview`, navigateOptions);
-        } else {
-          // 检查是否有描述
-          const hasDescriptions = project.pages.some(p => p.description_content);
-          if (hasDescriptions) {
-            navigate(`/project/${projectId}/detail`, navigateOptions);
-          } else {
-            navigate(`/project/${projectId}/outline`, navigateOptions);
-          }
-        }
-      } else {
-        // 没有页面，跳转到大纲编辑
-        navigate(`/project/${projectId}/outline`, navigateOptions);
-      }
+      // 根据项目状态跳转到不同页面
+      const route = getProjectRoute(project);
+      navigate(route, { state: { from: 'history' } });
     } catch (err: any) {
       console.error('打开项目失败:', err);
       show({ 
@@ -85,60 +80,36 @@ export const History: React.FC = () => {
         type: 'error' 
       });
     }
-  };
+  }, [selectedProjects, editingProjectId, setCurrentProject, syncProject, navigate, getProjectRoute, show]);
 
-  const handleDeleteProject = async (e: React.MouseEvent, project: Project) => {
-    e.stopPropagation(); // 阻止事件冒泡，避免触发项目选择
-    
-    const projectId = project.id || project.project_id;
-    if (!projectId) return;
+  // ===== 批量选择操作 =====
 
-    const projectTitle = project.idea_prompt || '未命名项目';
-    confirm(
-      `确定要删除项目"${projectTitle}"吗？此操作不可恢复。`,
-      async () => {
-        await deleteProjects([projectId]);
-      },
-      { title: '确认删除', variant: 'danger' }
-    );
-  };
+  const handleToggleSelect = useCallback((projectId: string) => {
+    setSelectedProjects(prev => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(projectId)) {
+        newSelected.delete(projectId);
+      } else {
+        newSelected.add(projectId);
+      }
+      return newSelected;
+    });
+  }, []);
 
-  const handleToggleSelect = (projectId: string) => {
-    const newSelected = new Set(selectedProjects);
-    if (newSelected.has(projectId)) {
-      newSelected.delete(projectId);
-    } else {
-      newSelected.add(projectId);
-    }
-    setSelectedProjects(newSelected);
-  };
+  const handleSelectAll = useCallback(() => {
+    setSelectedProjects(prev => {
+      if (prev.size === projects.length) {
+        return new Set();
+      } else {
+        const allIds = projects.map(p => p.id || p.project_id).filter(Boolean) as string[];
+        return new Set(allIds);
+      }
+    });
+  }, [projects]);
 
-  const handleSelectAll = () => {
-    if (selectedProjects.size === projects.length) {
-      // 全部选中，则取消全选
-      setSelectedProjects(new Set());
-    } else {
-      // 全选
-      const allIds = projects.map(p => p.id || p.project_id).filter(Boolean) as string[];
-      setSelectedProjects(new Set(allIds));
-    }
-  };
+  // ===== 删除操作 =====
 
-  const handleBatchDelete = async () => {
-    if (selectedProjects.size === 0) return;
-
-    const count = selectedProjects.size;
-    confirm(
-      `确定要删除选中的 ${count} 个项目吗？此操作不可恢复。`,
-      async () => {
-        const projectIds = Array.from(selectedProjects);
-        await deleteProjects(projectIds);
-      },
-      { title: '确认批量删除', variant: 'danger' }
-    );
-  };
-
-  const deleteProjects = async (projectIds: string[]) => {
+  const deleteProjects = useCallback(async (projectIds: string[]) => {
     setIsDeleting(true);
     const currentProjectId = localStorage.getItem('currentProjectId');
     let deletedCurrentProject = false;
@@ -156,7 +127,7 @@ export const History: React.FC = () => {
       }
 
       // 从列表中移除已删除的项目
-      setProjects(projects.filter(p => {
+      setProjects(prev => prev.filter(p => {
         const id = p.id || p.project_id;
         return id && !projectIds.includes(id);
       }));
@@ -184,55 +155,101 @@ export const History: React.FC = () => {
     } finally {
       setIsDeleting(false);
     }
-  };
+  }, [setCurrentProject, show]);
 
-  const getFirstPageImage = (project: Project): string | null => {
-    if (!project.pages || project.pages.length === 0) {
-      return null;
+  const handleDeleteProject = useCallback(async (e: React.MouseEvent, project: Project) => {
+    e.stopPropagation(); // 阻止事件冒泡，避免触发项目选择
+    
+    const projectId = project.id || project.project_id;
+    if (!projectId) return;
+
+    const projectTitle = getProjectTitle(project);
+    confirm(
+      `确定要删除项目"${projectTitle}"吗？此操作不可恢复。`,
+      async () => {
+        await deleteProjects([projectId]);
+      },
+      { title: '确认删除', variant: 'danger' }
+    );
+  }, [confirm, deleteProjects]);
+
+  const handleBatchDelete = useCallback(async () => {
+    if (selectedProjects.size === 0) return;
+
+    const count = selectedProjects.size;
+    confirm(
+      `确定要删除选中的 ${count} 个项目吗？此操作不可恢复。`,
+      async () => {
+        const projectIds = Array.from(selectedProjects);
+        await deleteProjects(projectIds);
+      },
+      { title: '确认批量删除', variant: 'danger' }
+    );
+  }, [selectedProjects, confirm, deleteProjects]);
+
+  // ===== 编辑操作 =====
+
+  const handleStartEdit = useCallback((e: React.MouseEvent, project: Project) => {
+    e.stopPropagation(); // 阻止事件冒泡，避免触发项目选择
+    
+    // 如果正在批量选择模式，不允许编辑
+    if (selectedProjects.size > 0) {
+      return;
     }
     
-    // 找到第一页有图片的页面
-    const firstPageWithImage = project.pages.find(p => p.generated_image_path);
-    if (firstPageWithImage?.generated_image_path) {
-      return getImageUrl(firstPageWithImage.generated_image_path, firstPageWithImage.updated_at);
-    }
+    const projectId = project.id || project.project_id;
+    if (!projectId) return;
     
-    return null;
-  };
+    const currentTitle = getProjectTitle(project);
+    setEditingProjectId(projectId);
+    setEditingTitle(currentTitle);
+  }, [selectedProjects]);
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const handleCancelEdit = useCallback(() => {
+    setEditingProjectId(null);
+    setEditingTitle('');
+  }, []);
 
-  const getStatusText = (project: Project) => {
-    if (!project.pages || project.pages.length === 0) {
-      return '未开始';
+  const handleSaveEdit = useCallback(async (projectId: string) => {
+    if (!editingTitle.trim()) {
+      show({ message: '项目名称不能为空', type: 'error' });
+      return;
     }
-    const hasImages = project.pages.some(p => p.generated_image_path);
-    if (hasImages) {
-      return '已完成';
-    }
-    const hasDescriptions = project.pages.some(p => p.description_content);
-    if (hasDescriptions) {
-      return '待生成图片';
-    }
-    return '待生成描述';
-  };
 
-  const getStatusColor = (project: Project) => {
-    const status = getStatusText(project);
-    if (status === '已完成') return 'text-green-600 bg-green-50';
-    if (status === '待生成图片') return 'text-yellow-600 bg-yellow-50';
-    if (status === '待生成描述') return 'text-blue-600 bg-blue-50';
-    return 'text-gray-600 bg-gray-50';
-  };
+    try {
+      // 调用API更新项目名称
+      await api.updateProject(projectId, { idea_prompt: editingTitle.trim() });
+      
+      // 更新本地状态
+      setProjects(prev => prev.map(p => {
+        const id = p.id || p.project_id;
+        if (id === projectId) {
+          return { ...p, idea_prompt: editingTitle.trim() };
+        }
+        return p;
+      }));
+
+      setEditingProjectId(null);
+      setEditingTitle('');
+      show({ message: '项目名称已更新', type: 'success' });
+    } catch (err: any) {
+      console.error('更新项目名称失败:', err);
+      show({ 
+        message: '更新项目名称失败: ' + (err.message || '未知错误'), 
+        type: 'error' 
+      });
+    }
+  }, [editingTitle, show]);
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent, projectId: string) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleSaveEdit(projectId);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      handleCancelEdit();
+    }
+  }, [handleSaveEdit, handleCancelEdit]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-banana-50 via-white to-gray-50">
@@ -340,87 +357,22 @@ export const History: React.FC = () => {
               const projectId = project.id || project.project_id;
               if (!projectId) return null;
               
-              const title = project.idea_prompt || '未命名项目';
-              const pageCount = project.pages?.length || 0;
-              const statusText = getStatusText(project);
-              const statusColor = getStatusColor(project);
-              const firstPageImage = getFirstPageImage(project);
-              const isSelected = selectedProjects.has(projectId);
-              
               return (
-                <Card
+                <ProjectCard
                   key={projectId}
-                  className={`p-6 transition-all ${
-                    isSelected 
-                      ? 'border-2 border-banana-500 bg-banana-50' 
-                      : 'hover:shadow-lg border border-gray-200'
-                  } ${selectedProjects.size > 0 ? 'cursor-default' : 'cursor-pointer'}`}
-                  onClick={() => handleSelectProject(project)}
-                >
-                  <div className="flex items-start gap-4">
-                    {/* 复选框 */}
-                    <div className="pt-1" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => handleToggleSelect(projectId)}
-                        className="w-4 h-4 text-banana-600 border-gray-300 rounded focus:ring-banana-500 cursor-pointer"
-                      />
-                    </div>
-                    
-                    {/* 左侧：项目信息 */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="text-lg font-semibold text-gray-900 truncate">
-                          {title}
-                        </h3>
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${statusColor}`}>
-                          {statusText}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <FileText size={14} />
-                          {pageCount} 页
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Clock size={14} />
-                          {formatDate(project.updated_at || project.created_at)}
-                        </span>
-                      </div>
-                    </div>
-                    
-                    {/* 右侧：图片预览和操作 */}
-                    <div className="flex items-center gap-3">
-                      {/* 图片预览 */}
-                      <div className="w-64 h-36 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 flex-shrink-0">
-                        {firstPageImage ? (
-                          <img
-                            src={firstPageImage}
-                            alt="第一页预览"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-gray-400">
-                            <FileText size={24} />
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* 删除按钮 */}
-                      <button
-                        onClick={(e) => handleDeleteProject(e, project)}
-                        className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                        title="删除项目"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                      
-                      {/* 右箭头 */}
-                      <ChevronRight size={20} className="text-gray-400 flex-shrink-0" />
-                    </div>
-                  </div>
-                </Card>
+                  project={project}
+                  isSelected={selectedProjects.has(projectId)}
+                  isEditing={editingProjectId === projectId}
+                  editingTitle={editingTitle}
+                  onSelect={handleSelectProject}
+                  onToggleSelect={handleToggleSelect}
+                  onDelete={handleDeleteProject}
+                  onStartEdit={handleStartEdit}
+                  onTitleChange={setEditingTitle}
+                  onTitleKeyDown={handleTitleKeyDown}
+                  onSaveEdit={handleSaveEdit}
+                  isBatchMode={selectedProjects.size > 0}
+                />
               );
             })}
           </div>
