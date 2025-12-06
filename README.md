@@ -397,20 +397,15 @@ banana-slides/
 │   │   ├── response.py         # 统一响应格式
 │   │   ├── validators.py       # 数据验证
 │   │   └── path_utils.py       # 路径处理
-│   ├── scripts/                # 脚本工具
-│   │   └── export_latest_reference_file.py
 │   ├── instance/               # SQLite数据库（自动生成）
-│   ├── uploads/                # 后端文件上传目录
 │   ├── exports/                # 导出文件目录
 │   ├── Dockerfile
 │   └── README.md
 │
 ├── tests/                      # 测试文件目录
 ├── v0_demo/                    # 早期演示版本
-├── uploads/                    # 根级文件上传目录
 ├── output/                     # 输出文件目录
 │
-├── generate-example.py         # 示例生成脚本
 ├── pyproject.toml              # Python项目配置（uv管理）
 ├── uv.lock                     # uv依赖锁定文件
 ├── docker-compose.yml          # Docker Compose配置
