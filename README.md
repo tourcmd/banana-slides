@@ -156,9 +156,9 @@ cd banana-slides
 
 1. **配置环境变量**
 
-创建 `.env` 文件（参考 `env.example`）：
+创建 `.env` 文件（参考 `.env.example`）：
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 编辑 `.env` 文件，配置必要的环境变量：
@@ -403,7 +403,7 @@ banana-slides/
 ├── pyproject.toml              # Python项目配置（uv管理）
 ├── uv.lock                     # uv依赖锁定文件
 ├── docker-compose.yml          # Docker Compose配置
-├── env.example                 # 环境变量示例
+├── .env.example                 # 环境变量示例
 ├── LICENSE                     # MIT许可证
 └── README.md                   # 本文件
 ```
