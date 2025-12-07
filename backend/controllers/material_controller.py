@@ -2,9 +2,10 @@
 Material Controller - handles standalone material image generation
 """
 from flask import Blueprint, request, current_app
-from models import db, Project, Material
+from models import db, Project, Material, Task
 from utils import success_response, error_response, not_found, bad_request
 from services import AIService, FileService
+from services.task_manager import task_manager, generate_material_image_task
 from pathlib import Path
 from werkzeug.utils import secure_filename
 from typing import Optional
@@ -175,6 +176,16 @@ def generate_material_image(project_id):
         if not prompt:
             return bad_request("prompt is required")
 
+        # 处理project_id：对于全局素材，使用'global'作为Task的project_id
+        # Task模型要求project_id不能为null，但Material可以
+        task_project_id = project_id if project_id is not None else 'global'
+        
+        # 验证project_id（如果不是'global'）
+        if task_project_id != 'global':
+            project = Project.query.get(task_project_id)
+            if not project:
+                return not_found('Project')
+
         # Initialize services
         ai_service = AIService(
             current_app.config['GOOGLE_API_KEY'],
@@ -182,7 +193,9 @@ def generate_material_image(project_id):
         )
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
 
+        # 创建临时目录保存参考图片（后台任务会清理）
         temp_dir = Path(tempfile.mkdtemp(dir=current_app.config['UPLOAD_FOLDER']))
+        temp_dir_str = str(temp_dir)
 
         try:
             ref_path = None
@@ -191,6 +204,9 @@ def generate_material_image(project_id):
                 ref_filename = secure_filename(ref_file.filename or 'ref.png')
                 ref_path = temp_dir / ref_filename
                 ref_file.save(str(ref_path))
+                ref_path_str = str(ref_path)
+            else:
+                ref_path_str = None
 
             # Save additional reference images to temp directory
             additional_ref_images = []
@@ -202,45 +218,50 @@ def generate_material_image(project_id):
                 extra.save(str(extra_path))
                 additional_ref_images.append(str(extra_path))
 
-            # Call text-to-image model with user's original prompt
-            image = ai_service.generate_image(
-                prompt=prompt,
-                ref_image_path=str(ref_path) if ref_path else None,
-                aspect_ratio=current_app.config['DEFAULT_ASPECT_RATIO'],
-                resolution=current_app.config['DEFAULT_RESOLUTION'],
-                additional_ref_images=additional_ref_images or None,
+            # Create async task for material generation
+            task = Task(
+                project_id=task_project_id,
+                task_type='GENERATE_MATERIAL',
+                status='PENDING'
             )
-
-            if not image:
-                return error_response('AI_SERVICE_ERROR', 'Failed to generate image', 503)
-
-            # Save generated material image
-            relative_path = file_service.save_material_image(image, project_id)
-            relative = Path(relative_path)
-            filename = relative.name
-
-            # Construct frontend-accessible URL
-            image_url = file_service.get_file_url(project_id, 'materials', filename)
-
-            # Save material info to database
-            material = Material(
-                project_id=project_id,
-                filename=filename,
-                relative_path=relative_path,
-                url=image_url
-            )
-            db.session.add(material)
+            task.set_progress({
+                'total': 1,
+                'completed': 0,
+                'failed': 0
+            })
+            db.session.add(task)
             db.session.commit()
 
+            # Get app instance for background task
+            app = current_app._get_current_object()
+
+            # Submit background task
+            task_manager.submit_task(
+                task.id,
+                generate_material_image_task,
+                task_project_id,  # 传递给任务函数，它会处理'global'的情况
+                prompt,
+                ai_service,
+                file_service,
+                ref_path_str,
+                additional_ref_images if additional_ref_images else None,
+                current_app.config['DEFAULT_ASPECT_RATIO'],
+                current_app.config['DEFAULT_RESOLUTION'],
+                temp_dir_str,
+                app
+            )
+
+            # Return task_id immediately (不再清理temp_dir，由后台任务清理)
             return success_response({
-                "image_url": image_url,
-                "relative_path": relative_path,
-                "material_id": material.id,
-            })
-        finally:
-            # Clean up temp directory
+                'task_id': task.id,
+                'status': 'PENDING'
+            }, status_code=202)
+        
+        except Exception as e:
+            # Clean up temp directory on error
             if temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     except Exception as e:
         db.session.rollback()

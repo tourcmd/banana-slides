@@ -394,13 +394,14 @@ export const exportPDF = async (
 
 /**
  * 生成单张素材图片（不绑定具体页面）
+ * 现在返回异步任务ID，需要通过getTaskStatus轮询获取结果
  */
 export const generateMaterialImage = async (
   projectId: string,
   prompt: string,
   refImage?: File | null,
   extraImages?: File[]
-): Promise<ApiResponse<{ image_url: string; relative_path: string }>> => {
+): Promise<ApiResponse<{ task_id: string; status: string }>> => {
   const formData = new FormData();
   formData.append('prompt', prompt);
   if (refImage) {
@@ -413,7 +414,7 @@ export const generateMaterialImage = async (
     });
   }
 
-  const response = await apiClient.post<ApiResponse<{ image_url: string; relative_path: string }>>(
+  const response = await apiClient.post<ApiResponse<{ task_id: string; status: string }>>(
     `/api/projects/${projectId}/materials/generate`,
     formData
   );

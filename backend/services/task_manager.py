@@ -7,7 +7,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, List, Dict, Any
 from datetime import datetime
-from models import db, Task, Page
+from models import db, Task, Page, Material
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -644,4 +645,101 @@ def edit_page_image_task(task_id: str, project_id: str, page_id: str,
             if page:
                 page.status = 'FAILED'
                 db.session.commit()
+
+
+def generate_material_image_task(task_id: str, project_id: str, prompt: str,
+                                 ai_service, file_service,
+                                 ref_image_path: str = None,
+                                 additional_ref_images: List[str] = None,
+                                 aspect_ratio: str = "16:9",
+                                 resolution: str = "2K",
+                                 temp_dir: str = None, app=None):
+    """
+    Background task for generating a material image
+    复用核心的generate_image逻辑，但保存到Material表而不是Page表
+    
+    Note: app instance MUST be passed from the request context
+    project_id can be None for global materials (but Task model requires a project_id,
+    so we use a special value 'global' for task tracking)
+    """
+    if app is None:
+        raise ValueError("Flask app instance must be provided")
+    
+    with app.app_context():
+        try:
+            # Update task status to PROCESSING
+            task = Task.query.get(task_id)
+            if not task:
+                return
+            
+            task.status = 'PROCESSING'
+            db.session.commit()
+            
+            # Generate image (复用核心逻辑)
+            logger.info(f"🎨 Generating material image with prompt: {prompt[:100]}...")
+            image = ai_service.generate_image(
+                prompt=prompt,
+                ref_image_path=ref_image_path,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                additional_ref_images=additional_ref_images or None,
+            )
+            
+            if not image:
+                raise ValueError("Failed to generate image")
+            
+            # 处理project_id：如果为'global'或None，转换为None
+            actual_project_id = None if (project_id == 'global' or project_id is None) else project_id
+            
+            # Save generated material image
+            relative_path = file_service.save_material_image(image, actual_project_id)
+            relative = Path(relative_path)
+            filename = relative.name
+            
+            # Construct frontend-accessible URL
+            image_url = file_service.get_file_url(actual_project_id, 'materials', filename)
+            
+            # Save material info to database
+            material = Material(
+                project_id=actual_project_id,
+                filename=filename,
+                relative_path=relative_path,
+                url=image_url
+            )
+            db.session.add(material)
+            
+            # Mark task as completed
+            task.status = 'COMPLETED'
+            task.completed_at = datetime.utcnow()
+            task.set_progress({
+                "total": 1,
+                "completed": 1,
+                "failed": 0,
+                "material_id": material.id,
+                "image_url": image_url
+            })
+            db.session.commit()
+            
+            logger.info(f"✅ Task {task_id} COMPLETED - Material {material.id} generated")
+        
+        except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            logger.error(f"Task {task_id} FAILED: {error_detail}")
+            
+            # Mark task as failed
+            task = Task.query.get(task_id)
+            if task:
+                task.status = 'FAILED'
+                task.error_message = str(e)
+                task.completed_at = datetime.utcnow()
+                db.session.commit()
+        
+        finally:
+            # Clean up temp directory
+            if temp_dir:
+                import shutil
+                temp_path = Path(temp_dir)
+                if temp_path.exists():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 

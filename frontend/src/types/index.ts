@@ -79,6 +79,8 @@ export interface Task {
   progress?: {
     total: number;
     completed: number;
+    failed?: number;
+    [key: string]: any; // 允许额外的字段，如material_id, image_url等
   };
   error_message?: string;
   result?: any;

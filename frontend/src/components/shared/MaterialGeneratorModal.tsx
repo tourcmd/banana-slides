@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Image as ImageIcon, ImagePlus, Upload, X, FolderOpen } from 'lucide-react';
 import { Modal, Textarea, Button, useToast, MaterialSelector, Skeleton } from '@/components/shared';
-import { generateMaterialImage } from '@/api/endpoints';
+import { generateMaterialImage, getTaskStatus } from '@/api/endpoints';
 import { getImageUrl } from '@/api/client';
 import { materialUrlToFile } from './MaterialSelector';
 import type { Material } from '@/api/endpoints';
+import type { Task } from '@/types';
 
 interface MaterialGeneratorModalProps {
   projectId?: string | null; // 可选，如果不提供则生成全局素材
@@ -89,6 +90,87 @@ export const MaterialGeneratorModal: React.FC<MaterialGeneratorModalProps> = ({
     }
   };
 
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 清理轮询
+  useEffect(() => {
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const pollMaterialTask = async (taskId: string) => {
+    const targetProjectId = projectId || 'global'; // 使用'global'作为Task的project_id
+    const maxAttempts = 60; // 最多轮询60次（约2分钟）
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        attempts++;
+        const response = await getTaskStatus(targetProjectId, taskId);
+        const task: Task = response.data;
+
+        if (task.status === 'COMPLETED') {
+          // 任务完成，从progress中获取结果
+          const progress = task.progress || {};
+          const imageUrl = progress.image_url;
+          
+          if (imageUrl) {
+            setPreviewUrl(getImageUrl(imageUrl));
+            const message = projectId 
+              ? '素材生成成功，已保存到历史素材库' 
+              : '素材生成成功，已保存到全局素材库';
+            show({ message, type: 'success' });
+          } else {
+            show({ message: '素材生成完成，但未找到图片地址', type: 'error' });
+          }
+          
+          setIsGenerating(false);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        } else if (task.status === 'FAILED') {
+          show({
+            message: task.error_message || '素材生成失败',
+            type: 'error',
+          });
+          setIsGenerating(false);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        } else if (task.status === 'PENDING' || task.status === 'PROCESSING') {
+          // 继续轮询
+          if (attempts >= maxAttempts) {
+            show({ message: '素材生成超时，请稍后查看素材库', type: 'warning' });
+            setIsGenerating(false);
+            if (pollingIntervalRef.current) {
+              clearInterval(pollingIntervalRef.current);
+              pollingIntervalRef.current = null;
+            }
+          }
+        }
+      } catch (error: any) {
+        console.error('轮询任务状态失败:', error);
+        if (attempts >= maxAttempts) {
+          show({ message: '轮询任务状态失败，请稍后查看素材库', type: 'error' });
+          setIsGenerating(false);
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        }
+      }
+    };
+
+    // 立即执行一次，然后每2秒轮询一次
+    poll();
+    pollingIntervalRef.current = setInterval(poll, 2000);
+  };
+
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       show({ message: '请输入提示词', type: 'error' });
@@ -97,26 +179,23 @@ export const MaterialGeneratorModal: React.FC<MaterialGeneratorModalProps> = ({
 
     setIsGenerating(true);
     try {
-      // 如果没有projectId，使用'none'表示生成全局素材
+      // 如果没有projectId，使用'none'表示生成全局素材（后端会转换为'global'用于Task）
       const targetProjectId = projectId || 'none';
       const resp = await generateMaterialImage(targetProjectId, prompt.trim(), refImage as File, extraImages);
-      const url = resp.data?.image_url;
-      if (url) {
-        // 最新结果展示在顶部
-        setPreviewUrl(getImageUrl(url));
-        const message = projectId 
-          ? '素材生成成功，已保存到历史素材库' 
-          : '素材生成成功，已保存到全局素材库';
-        show({ message, type: 'success' });
+      const taskId = resp.data?.task_id;
+      
+      if (taskId) {
+        // 开始轮询任务状态
+        await pollMaterialTask(taskId);
       } else {
-        show({ message: '素材生成失败：未返回图片地址', type: 'error' });
+        show({ message: '素材生成失败：未返回任务ID', type: 'error' });
+        setIsGenerating(false);
       }
     } catch (error: any) {
       show({
         message: error?.response?.data?.error?.message || error.message || '素材生成失败',
         type: 'error',
       });
-    } finally {
       setIsGenerating(false);
     }
   };
