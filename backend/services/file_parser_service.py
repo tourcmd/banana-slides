@@ -17,8 +17,33 @@ from markitdown import MarkItDown
 logger = logging.getLogger(__name__)
 
 
-def _get_ai_provider_format() -> str:
-    """Get the configured AI provider format"""
+def _get_ai_provider_format(provider_format: str = None) -> str:
+    """Get the configured AI provider format
+    
+    Priority:
+        1. Provided provider_format parameter
+        2. Flask app.config['AI_PROVIDER_FORMAT'] (from database settings)
+        3. Environment variable AI_PROVIDER_FORMAT
+        4. Default: 'gemini'
+    
+    Args:
+        provider_format: Optional provider format string. If not provided, reads from Flask config or environment variable.
+    """
+    if provider_format:
+        return provider_format.lower()
+    
+    # Try to get from Flask app config first (database settings)
+    try:
+        from flask import current_app
+        if current_app and hasattr(current_app, 'config'):
+            config_value = current_app.config.get('AI_PROVIDER_FORMAT')
+            if config_value:
+                return str(config_value).lower()
+    except RuntimeError:
+        # Not in Flask application context
+        pass
+    
+    # Fallback to environment variable
     return os.getenv('AI_PROVIDER_FORMAT', 'gemini').lower()
 
 
@@ -28,7 +53,8 @@ class FileParserService:
     def __init__(self, mineru_token: str, mineru_api_base: str = "https://mineru.net",
                  google_api_key: str = "", google_api_base: str = "",
                  openai_api_key: str = "", openai_api_base: str = "",
-                 image_caption_model: str = "gemini-3-flash-preview"):
+                 image_caption_model: str = "gemini-3-flash-preview",
+                 provider_format: str = None):
         """
         Initialize the file parser service
         
@@ -40,6 +66,7 @@ class FileParserService:
             openai_api_key: OpenAI API key for image captioning (used when AI_PROVIDER_FORMAT=openai)
             openai_api_base: OpenAI API base URL
             image_caption_model: Model to use for image captioning
+            provider_format: AI provider format ('gemini' or 'openai'). If not provided, reads from environment variable.
         """
         self.mineru_token = mineru_token
         self.mineru_api_base = mineru_api_base
@@ -56,7 +83,7 @@ class FileParserService:
         # Clients will be initialized lazily based on AI_PROVIDER_FORMAT
         self._gemini_client = None
         self._openai_client = None
-        self._provider_format = _get_ai_provider_format()
+        self._provider_format = _get_ai_provider_format(provider_format)
     
     def _get_gemini_client(self):
         """Lazily initialize Gemini client"""

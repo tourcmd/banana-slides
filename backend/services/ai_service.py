@@ -92,7 +92,7 @@ class AIService:
             self.text_model = config.TEXT_MODEL
             self.image_model = config.IMAGE_MODEL
         
-        # Use provided providers or create from factory based on AI_PROVIDER_FORMAT env var
+        # Use provided providers or create from factory based on AI_PROVIDER_FORMAT (from Flask config or env var)
         self.text_provider = text_provider or get_text_provider(model=self.text_model)
         self.image_provider = image_provider or get_image_provider(model=self.image_model)
     

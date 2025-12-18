@@ -64,7 +64,8 @@ def _parse_file_async(file_id: str, file_path: str, filename: str, app):
                 google_api_base=current_app.config.get('GOOGLE_API_BASE', ''),
                 openai_api_key=current_app.config.get('OPENAI_API_KEY', ''),
                 openai_api_base=current_app.config.get('OPENAI_API_BASE', ''),
-                image_caption_model=current_app.config['IMAGE_CAPTION_MODEL']
+                image_caption_model=current_app.config['IMAGE_CAPTION_MODEL'],
+                provider_format=current_app.config.get('AI_PROVIDER_FORMAT', 'gemini')
             )
             
             # Parse file
